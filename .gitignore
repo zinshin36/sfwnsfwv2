@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+build/
+dist/
+*.spec.bak
+model/model.onnx
+model/selected_tags.csv
+model/*.part
+logs/
+release/

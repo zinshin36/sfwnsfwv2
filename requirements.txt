@@ -1,0 +1,6 @@
+# WD EVA02 Large v3 uses ONNX Runtime; TensorFlow/DeepDanbooru are no longer needed.
+numpy==1.26.4
+onnxruntime==1.20.1
+opencv-python==4.10.0.84
+Pillow==11.0.0
+pyinstaller==6.11.1
