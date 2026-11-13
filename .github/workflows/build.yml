@@ -3,25 +3,25 @@ name: Build Windows ZIP - WD EVA02 Large v3
 on:
   push:
     branches:
-      - master
       - main
+      - master
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
-    name: Build Windows application and package ZIP
+    name: Build Windows application and publish ZIP release
     runs-on: windows-latest
     timeout-minutes: 180
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up 64-bit Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11.9"
           architecture: "x64"
@@ -46,16 +46,106 @@ jobs:
         shell: pwsh
         run: pyinstaller --clean --noconfirm app.spec
 
-      - name: Stage executable and all runtime files for the GitHub ZIP artifact
+      - name: Stage executable and all runtime files
         shell: pwsh
         run: python stage_release.py --dist-dir dist/UltraStrictSorter --output-dir release
 
-      - name: Show staged Windows application
+      - name: Create and verify standalone ZIP for GitHub Releases
         shell: pwsh
-        run: Get-ChildItem -Recurse release/UltraStrictSorter | Select-Object FullName, Length
+        run: |
+          @'
+          from pathlib import Path
+          from zipfile import ZIP_STORED, ZipFile
 
-      - name: Upload ready-to-use Windows application (GitHub creates the ZIP)
-        uses: actions/upload-artifact@v4
+          root = Path("release/UltraStrictSorter")
+          output = Path("release/UltraStrictSorter-WD-EVA02-Large-v3-Windows.zip")
+
+          if not root.is_dir():
+              raise SystemExit(f"Staged application folder is missing: {root}")
+
+          required = {
+              "UltraStrictSorter.exe",
+              "README-RUN.txt",
+              "_internal/model/model.onnx",
+              "_internal/model/selected_tags.csv",
+              "_internal/config/tag_rules.json",
+          }
+
+          files = sorted(path for path in root.rglob("*") if path.is_file())
+          if not files:
+              raise SystemExit("The staged application folder is empty.")
+
+          output.parent.mkdir(parents=True, exist_ok=True)
+          with ZipFile(output, "w", compression=ZIP_STORED, allowZip64=True) as archive:
+              for path in files:
+                  archive.write(path, arcname=path.relative_to(root).as_posix())
+
+          with ZipFile(output, "r") as archive:
+              names = set(archive.namelist())
+              missing = sorted(required - names)
+              if missing:
+                  raise SystemExit("ZIP is missing required files: " + ", ".join(missing))
+              corrupt = archive.testzip()
+              if corrupt:
+                  raise SystemExit(f"ZIP integrity check failed at: {corrupt}")
+
+          print(f"Created: {output}")
+          print(f"Files: {len(files):,}")
+          print(f"ZIP size: {output.stat().st_size:,} bytes")
+          print("Verified: EXE, ONNX model, tag CSV, rules, and run instructions are present.")
+          '@ | python -
+
+      - name: Publish versioned GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            throw "GitHub CLI (gh) is not available on this runner."
+          }
+
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = "v1.0.$($env:GITHUB_RUN_NUMBER)"
+          $title = "Ultra Strict Media Sorter - WD EVA02 Large v3 $tag"
+          $zipPath = (Resolve-Path "release/UltraStrictSorter-WD-EVA02-Large-v3-Windows.zip").Path
+          $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+
+          @"
+          Automated Windows build of Ultra Strict Media Sorter using WD EVA02 Large v3.
+
+          - Version: $tag
+          - Model: SmilingWolf WD EVA02 Large Tagger v3
+          - Platform: Windows x64
+          - Build commit: $($env:GITHUB_SHA)
+
+          Download the attached ZIP, extract all contents, keep UltraStrictSorter.exe beside the _internal folder, and run the EXE.
+          "@ | Set-Content -Path $notesPath -Encoding utf8
+
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists; replacing its ZIP asset."
+            gh release upload $tag $zipPath --repo $repo --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Failed to upload the ZIP asset to existing release $tag." }
+            gh release edit $tag --repo $repo --title $title --notes-file $notesPath
+            if ($LASTEXITCODE -ne 0) { throw "Failed to update release details for $tag." }
+          }
+          else {
+            Write-Host "Creating GitHub Release $tag."
+            gh release create $tag $zipPath --repo $repo --title $title --notes-file $notesPath --target $env:GITHUB_SHA
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create GitHub Release $tag." }
+          }
+
+          $releaseUrl = gh release view $tag --repo $repo --json url --jq .url
+          if ($LASTEXITCODE -ne 0) { throw "Release $tag was created but could not be verified." }
+          Write-Host "Published release: $releaseUrl"
+          "### GitHub Release published" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Tag: ``$tag``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Download: $releaseUrl" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload ready-to-use application as an Actions artifact
+        uses: actions/upload-artifact@v7
         with:
           name: UltraStrictSorter-WD-EVA02-Large-v3-Windows
           path: release/UltraStrictSorter/*
