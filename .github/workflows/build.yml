@@ -1,0 +1,64 @@
+name: Build Windows ZIP - WD EVA02 Large v3
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows application and package ZIP
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up 64-bit Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+          architecture: "x64"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Download pinned WD EVA02 Large v3 model and tag list
+        shell: pwsh
+        run: python download_model.py
+
+      - name: Verify downloaded model and tag list
+        shell: pwsh
+        run: python verify_model.py
+
+      - name: Build Windows ONEDIR application
+        shell: pwsh
+        run: pyinstaller --clean --noconfirm app.spec
+
+      - name: Stage executable and all runtime files for the GitHub ZIP artifact
+        shell: pwsh
+        run: python stage_release.py --dist-dir dist/UltraStrictSorter --output-dir release
+
+      - name: Show staged Windows application
+        shell: pwsh
+        run: Get-ChildItem -Recurse release/UltraStrictSorter | Select-Object FullName, Length
+
+      - name: Upload ready-to-use Windows application (GitHub creates the ZIP)
+        uses: actions/upload-artifact@v4
+        with:
+          name: UltraStrictSorter-WD-EVA02-Large-v3-Windows
+          path: release/UltraStrictSorter/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
